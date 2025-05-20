@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using System.Collections;
 using System.Collections.Generic;
+using UnityEngine.Audio; // Add this at the top
 
 public class VintageRhythmGame : MonoBehaviour
 {
@@ -55,6 +56,11 @@ public class VintageRhythmGame : MonoBehaviour
     public float goldRushDuration = 10f;     // Duration of gold rush in seconds
     public float goldRushSpawnRate = 0.1f;   // Time between spawns in gold rush mode
 
+    [Header("Audio Mixer")]
+    public AudioMixer audioMixer; // Assign your MainMixer in Inspector
+    public float normalCutoff = 22000f;
+    public float muffledCutoff = 500f;
+
     private bool isPaused = false;
     private int currentMashCount = 0;
     private bool doublePointsActive = false;
@@ -63,11 +69,34 @@ public class VintageRhythmGame : MonoBehaviour
     private float nextSpawnTime = 0f;
     private List<Arrow> activeArrows = new List<Arrow>();
 
+    [Header("Audio")]
+    public AudioSource upKeySound;      // Assign unique AudioSource for Up Arrow
+    public AudioSource downKeySound;    // Assign unique AudioSource for Down Arrow
+    public AudioSource leftKeySound;    // Assign unique AudioSource for Left Arrow
+    public AudioSource rightKeySound;   // Assign unique AudioSource for Right Arrow
+
+    public AudioSource wrongKeySound;   // Shared AudioSource for incorrect inputs
+
+    [Header("Game Over")]
+    public GameObject gameOverPanel;  // Assign the GameOver panel in the Inspector
+    public Button restartButton;      // Assign the restart button on the panel
+
+    [Header("Countdown Settings")]
+    public float startCountdownTime = 3f; // Duration of countdown before game starts
+    public TextMeshProUGUI countdownText; // Assign in inspector
+    public AudioSource backgroundMusic;   // Assign background music in inspector
+
+
+
     private void Start()
     {
         healthBar.maxValue = maxHealth;
         healthBar.value = maxHealth;
         arrowSpeed = initialArrowSpeed;
+        StartCoroutine(StartCountdownRoutine());
+        audioMixer.SetFloat("MusicLowPass", normalCutoff);
+
+
 
         comboText.gameObject.SetActive(false);
         UpdatePointsText();
@@ -77,10 +106,20 @@ public class VintageRhythmGame : MonoBehaviour
 
         if (mashGrowImage != null)
             mashGrowImage.gameObject.SetActive(false);
+        if (gameOverPanel != null)
+            gameOverPanel.SetActive(false);
+
+        if (restartButton != null)
+            restartButton.onClick.AddListener(RestartGame);
+
     }
 
     private void Update()
     {
+        if (gameOverPanel.activeSelf)
+            return; // Completely stop game logic if game is over
+
+
         if (isPaused)
         {
             HandleMashInput();
@@ -125,6 +164,36 @@ public class VintageRhythmGame : MonoBehaviour
             }
         }
     }
+    private IEnumerator StartCountdownRoutine()
+    {
+        isPaused = true;
+        float countdown = startCountdownTime;
+        if (countdownText != null)
+            countdownText.gameObject.SetActive(true);
+
+        while (countdown > 0)
+        {
+            if (countdownText != null)
+                countdownText.text = Mathf.Ceil(countdown).ToString();
+
+            yield return new WaitForSeconds(1f);
+            countdown -= 1f;
+        }
+
+        if (countdownText != null)
+        {
+            countdownText.text = "GO!";
+            yield return new WaitForSeconds(0.5f);
+            countdownText.gameObject.SetActive(false);
+        }
+
+        isPaused = false;
+
+        if (backgroundMusic != null)
+        {
+            backgroundMusic.Play();
+        }
+    }
 
     private void SpawnRandomArrow()
     {
@@ -167,31 +236,124 @@ public class VintageRhythmGame : MonoBehaviour
 
     private bool CheckKeyPress(ArrowDirection dir)
     {
-        switch (dir)
+        // Detect if any directional key was pressed
+        if (Input.GetKeyDown(upKey) || Input.GetKeyDown(downKey) ||
+            Input.GetKeyDown(leftKey) || Input.GetKeyDown(rightKey))
         {
-            case ArrowDirection.Up:
-                return Input.GetKeyDown(upKey);
-            case ArrowDirection.Down:
-                return Input.GetKeyDown(downKey);
-            case ArrowDirection.Left:
-                return Input.GetKeyDown(leftKey);
-            case ArrowDirection.Right:
-                return Input.GetKeyDown(rightKey);
-            default:
-                return false;
-        }
-    }
+            bool correct = false;
 
+            switch (dir)
+            {
+                case ArrowDirection.Up:
+                    if (Input.GetKeyDown(upKey))
+                    {
+                        correct = true;
+                        if (upKeySound != null) upKeySound.Play();
+                    }
+                    break;
+
+                case ArrowDirection.Down:
+                    if (Input.GetKeyDown(downKey))
+                    {
+                        correct = true;
+                        if (downKeySound != null) downKeySound.Play();
+                    }
+                    break;
+
+                case ArrowDirection.Left:
+                    if (Input.GetKeyDown(leftKey))
+                    {
+                        correct = true;
+                        if (leftKeySound != null) leftKeySound.Play();
+                    }
+                    break;
+
+                case ArrowDirection.Right:
+                    if (Input.GetKeyDown(rightKey))
+                    {
+                        correct = true;
+                        if (rightKeySound != null) rightKeySound.Play();
+                    }
+                    break;
+            }
+
+            if (!correct && wrongKeySound != null)
+                wrongKeySound.Play();
+
+            return correct;
+        }
+
+        return false;
+    }
     private void LoseHealth(float amount)
     {
         healthBar.value -= amount;
         if (healthBar.value <= 0)
         {
+            healthBar.value = 0;
             Debug.Log("Game Over!");
-            // Game over logic here
+            ShowGameOverPanel();
+            return;
         }
+
         ResetCombo();
     }
+    private void ShowGameOverPanel()
+    {
+        isPaused = true;
+
+        foreach (var arrow in activeArrows)
+        {
+            if (arrow != null)
+                Destroy(arrow.gameObject);
+        }
+        activeArrows.Clear();
+
+        if (gameOverPanel != null)
+        {
+            gameOverPanel.SetActive(true);
+
+            MonoBehaviour[] components = gameOverPanel.GetComponentsInChildren<MonoBehaviour>(true);
+            foreach (var comp in components)
+                comp.enabled = true;
+        }
+
+        if (backgroundMusic != null)
+        {
+            StartCoroutine(SlowAndDistortMusic());
+        }
+    }
+    private IEnumerator SlowAndDistortMusic()
+    {
+        float duration = 2f;
+        float timer = 0f;
+
+        float startPitch = backgroundMusic.pitch;
+        float startVolume = backgroundMusic.volume;
+
+        while (timer < duration)
+        {
+            float t = timer / duration;
+            backgroundMusic.pitch = Mathf.Lerp(startPitch, 0.3f, t);
+            backgroundMusic.volume = Mathf.Lerp(startVolume, 0f, t);
+
+            timer += Time.deltaTime;
+            yield return null;
+        }
+
+        backgroundMusic.Stop();
+        backgroundMusic.pitch = startPitch;
+        backgroundMusic.volume = startVolume;
+    }
+
+
+    private void RestartGame()
+    {
+        UnityEngine.SceneManagement.SceneManager.LoadScene(
+            UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
+    }
+
+
 
     private void RegisterHit()
     {
@@ -303,6 +465,11 @@ public class VintageRhythmGame : MonoBehaviour
         comboText.text = "GOLD RUSH!";
         comboText.gameObject.SetActive(true);
 
+        // Smoothly muffle the music
+        float currentCutoff;
+        audioMixer.GetFloat("MusicLowPass", out currentCutoff);
+        StartCoroutine(TransitionLowPass(currentCutoff, muffledCutoff, 1f)); // 1 second fade-in
+
         float goldRushEndTime = Time.time + goldRushDuration;
         while (Time.time < goldRushEndTime)
         {
@@ -311,6 +478,10 @@ public class VintageRhythmGame : MonoBehaviour
 
         goldRushActive = false;
         comboText.gameObject.SetActive(false);
+
+        // Smoothly restore the music
+        audioMixer.GetFloat("MusicLowPass", out currentCutoff);
+        StartCoroutine(TransitionLowPass(currentCutoff, normalCutoff, 1f)); // 1 second fade-out
 
         // Clear all active arrows after gold rush ends
         foreach (var arrow in activeArrows)
@@ -322,52 +493,55 @@ public class VintageRhythmGame : MonoBehaviour
 
         consecutiveHits = 0; // Reset combo
     }
-}
 
-public enum ArrowDirection { Up, Down, Left, Right }
 
-public class Arrow : MonoBehaviour
-{
-    public ArrowDirection direction;
-    private RectTransform rectTransform;
 
-    public void Initialize(ArrowDirection dir)
+    public enum ArrowDirection { Up, Down, Left, Right }
+
+    public class Arrow : MonoBehaviour
     {
-        direction = dir;
-        rectTransform = GetComponent<RectTransform>();
+        public ArrowDirection direction;
+        private RectTransform rectTransform;
 
-        switch (direction)
+        public void Initialize(ArrowDirection dir)
         {
-            case ArrowDirection.Up:
-                rectTransform.rotation = Quaternion.Euler(0, 0, 0);
-                break;
-            case ArrowDirection.Down:
-                rectTransform.rotation = Quaternion.Euler(0, 0, 180);
-                break;
-            case ArrowDirection.Left:
-                rectTransform.rotation = Quaternion.Euler(0, 0, 90);
-                break;
-            case ArrowDirection.Right:
-                rectTransform.rotation = Quaternion.Euler(0, 0, -90);
-                break;
+            direction = dir;
+            rectTransform = GetComponent<RectTransform>();
+            // No rotation applied; keep prefab's original look
+        }
+
+
+        public void MoveUp(float distance)
+        {
+            rectTransform.anchoredPosition += new Vector2(0, distance);
+        }
+
+        public bool IsPastHitZone(RectTransform hitZone)
+        {
+            return rectTransform.anchoredPosition.y > hitZone.anchoredPosition.y + hitZone.rect.height / 2f;
+        }
+
+        public bool IsInsideHitZone(RectTransform hitZone)
+        {
+            float yPos = rectTransform.anchoredPosition.y;
+            float top = hitZone.anchoredPosition.y + hitZone.rect.height / 2f;
+            float bottom = hitZone.anchoredPosition.y - hitZone.rect.height / 2f;
+
+            return yPos >= bottom && yPos <= top;
         }
     }
-    public void MoveUp(float distance)
+    private IEnumerator TransitionLowPass(float start, float end, float duration)
     {
-        rectTransform.anchoredPosition += new Vector2(0, distance);
+        float time = 0f;
+        while (time < duration)
+        {
+            time += Time.deltaTime;
+            float value = Mathf.Lerp(start, end, time / duration);
+            audioMixer.SetFloat("MusicLowPass", value);
+            yield return null;
+        }
+        audioMixer.SetFloat("MusicLowPass", end);
     }
 
-    public bool IsPastHitZone(RectTransform hitZone)
-    {
-        return rectTransform.anchoredPosition.y > hitZone.anchoredPosition.y + hitZone.rect.height / 2f;
-    }
 
-    public bool IsInsideHitZone(RectTransform hitZone)
-    {
-        float yPos = rectTransform.anchoredPosition.y;
-        float top = hitZone.anchoredPosition.y + hitZone.rect.height / 2f;
-        float bottom = hitZone.anchoredPosition.y - hitZone.rect.height / 2f;
-
-        return yPos >= bottom && yPos <= top;
-    }
 }
